@@ -33,10 +33,27 @@ test('the bar under the prompt has one button that hides and shows the dashboard
     component: 'SessionMode',
     props: { modes: [] },
   })
-  expect((await ui.find({ key: 'dashboard-toggle' }))?.text).toBe('Dashboard: Shown')
+  expect((await ui.find({ key: 'dashboard-toggle' }))?.text).toBe("◆ Damon's Tools ▾")
   await ui.press({ key: 'dashboard-toggle' })
-  expect((await ui.find({ key: 'dashboard-toggle' }))?.text).toBe('Dashboard: Hidden')
+  expect((await ui.find({ key: 'dashboard-toggle' }))?.text).toBe("◆ Damon's Tools ▸")
   await ui.press({ key: 'dashboard-toggle' })
-  expect((await ui.find({ key: 'dashboard-toggle' }))?.text).toBe('Dashboard: Shown')
+  expect((await ui.find({ key: 'dashboard-toggle' }))?.text).toBe("◆ Damon's Tools ▾")
   expect(panes).toEqual(['close damons-tools', 'open damons-tools'])
+})
+
+test('the status bar shows plan, model, effort, context, 5-hour usage and agents', async $ => {
+  const ui = await $.ui.mount({
+    plugin: 'damons-tools',
+    surface: 'terminal',
+    component: 'SessionMode',
+    props: { modes: [] },
+  })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' ')
+  expect(texts).toContain('effort')
+  expect(texts).toContain('ctx')
+  expect(texts).toContain('▱▱▱▱▱▱▱▱▱▱')
+  expect(texts).toContain('5h')
+  expect(texts).toContain('◇ 0 agents')
+  expect(texts).toMatch(/Subscription|API/)
+  expect(await ui.find({ key: 'dashboard-toggle' })).toBeDefined()
 })

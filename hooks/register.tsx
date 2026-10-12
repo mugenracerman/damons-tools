@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ModelChoice, PluginRow, Running } from '../types'
+import type { ModelChoice, PluginRow, Running, Usage } from '../types'
 
 const PANE = 'damons-tools'
 const TITLE = "Damon's Tools"
@@ -11,6 +11,14 @@ const EFFORT_BG = '#a06a9a'
 const ON_BG = '#2bb673'
 const OFF_BG = '#3a3a3a'
 const PENDING = '#e0b341'
+
+// Status bar colors.
+const PLAN = '#9ccc8a'
+const MODEL_MARK = '#4aa3ff'
+const EFFORT_FG = '#e0b341'
+const GOOD = '#2bb673'
+const WARN = '#e0b341'
+const BAD = '#e5534b'
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const FAMILIES: ModelChoice[] = [
@@ -29,6 +37,13 @@ const plugins = atom({ plugin: 'damons-tools', key: 'plugins' } as const, [])
 const notice = atom({ plugin: 'damons-tools', key: 'notice' } as const, null)
 const isShown = atom({ plugin: 'damons-tools', key: 'isShown' } as const, true)
 const running = atom({ plugin: 'damons-tools', key: 'running' } as const, null as Running | null)
+const usage = atom({ plugin: 'damons-tools', key: 'usage' } as const, {
+  window: 0,
+  contextPercent: null,
+  fiveHourPercent: null,
+  isSubscription: false,
+} as Usage)
+const agents = atom({ plugin: 'damons-tools', key: 'agents' } as const, 0)
 
 type $ = EngineInterface
 
@@ -65,6 +80,47 @@ function modelLabel(id: string): string {
 
 function effortLabel(level: string): string {
   return level === 'xhigh' ? 'XHigh' : titleCase(level)
+}
+
+// 1000000 -> "1M", 200000 -> "200K"
+function windowLabel(tokens: number): string {
+  if (tokens >= 1_000_000) return `${+(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`
+  return tokens > 0 ? String(tokens) : ''
+}
+
+function levelColor(percent: number): string {
+  return percent >= 80 ? BAD : percent >= 50 ? WARN : GOOD
+}
+
+// Ten cells, filled in proportion to the percentage.
+function meter(percent: number): string {
+  const filled = Math.max(0, Math.min(10, Math.round(percent / 10)))
+  return '▰'.repeat(filled) + '▱'.repeat(10 - filled)
+}
+
+async function measure($: $) {
+  try {
+    const { context, rateLimits } = await $.session.usage()
+    const fiveHour = rateLimits.find(r => r.kind === 'five_hour')
+    const next: Usage = {
+      window: context.window,
+      contextPercent: context.percent ?? null,
+      fiveHourPercent: fiveHour ? Math.round(fiveHour.percentUsed) : null,
+      isSubscription: rateLimits.length > 0,
+    }
+    const prev = await read($, usage)
+    if (JSON.stringify(prev) !== JSON.stringify(next)) await update($, usage, () => next)
+  } catch {}
+}
+
+const ACTIVE = new Set(['pending', 'running', 'waiting'])
+
+async function countAgents($: $) {
+  try {
+    const count = (await $.agent.list()).filter(a => ACTIVE.has(a.status)).length
+    if (count !== (await read($, agents))) await update($, agents, () => count)
+  } catch {}
 }
 
 // Every plugin in installed_plugins.json, whatever is installed now: nothing is hard-coded.
@@ -130,6 +186,7 @@ async function sync($: $) {
       await update($, effort, () => level)
     }
   } catch {}
+  await Promise.all([measure($), countAgents($)])
 }
 
 // True only when the reload ran: it throws, or answers with a refusal, where it
@@ -249,6 +306,12 @@ export const register: Register = on => {
     return yield* next(e)
   })
 
+  // Context fill and rate limits, as soon as the engine has new figures.
+  on('session.measure', async ($, e, next) => {
+    await measure($)
+    return next(e)
+  })
+
   // Picks up plugins installed or removed since the last look.
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) await refresh($)
@@ -268,21 +331,76 @@ export const register: Register = on => {
     return attached
   })
 
-  // One button in the bar under the prompt, in place of each plugin's own: they
-  // leave the bar to the dashboard while it is installed (it registers /damons-tools).
+  // The status bar under the prompt: plan, model, effort, context, 5-hour usage and
+  // agents, with the Damon's Tools button on the right in place of each plugin's own
+  // (they leave the bar to it while it is installed: it registers /damons-tools).
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const { Box, Button } = $.ui.resolve(e)
-    const shown = await read($, isShown)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const [shown, current, level, figures, agentCount] = await Promise.all([
+      read($, isShown),
+      read($, model),
+      read($, effort),
+      read($, usage),
+      read($, agents),
+    ])
     const theirs = await next(e).catch(() => null)
+    const bar = (key: string) => (
+      <Text key={key} dimColor>
+        │
+      </Text>
+    )
+    const ctx = figures.contextPercent ?? 0
+    const fiveHour = figures.fiveHourPercent
+    const window = windowLabel(figures.window)
     return (
-      <Box flexDirection="row" columnGap={1}>
-        <Box backgroundColor={shown ? ACCENT : OFF_BG} paddingX={1}>
-          <Button
-            key="dashboard-toggle"
-            plain
-            label={`Dashboard: ${shown ? 'Shown' : 'Hidden'}`}
-            onPress={() => setShown($, !shown)}
-          />
+      <Box flexDirection="column">
+        <Box key="status-bar" flexDirection="row" justifyContent="space-between">
+          <Box flexDirection="row" columnGap={2}>
+            <Text key="plan" color={PLAN}>
+              {figures.isSubscription ? 'Subscription' : 'API'}
+            </Text>
+            {bar('sep-1')}
+            <Box key="model" flexDirection="row">
+              <Text color={MODEL_MARK}>◆ </Text>
+              <Text bold>{current ? modelLabel(current) : '…'}</Text>
+              {window !== '' && <Text dimColor> · </Text>}
+              {window !== '' && <Text color={MODEL_MARK}>{window}</Text>}
+            </Box>
+            {bar('sep-2')}
+            <Box key="effort" flexDirection="row">
+              <Text dimColor>effort </Text>
+              <Text color={EFFORT_FG} bold>
+                {level ?? '–'}
+              </Text>
+            </Box>
+            {bar('sep-3')}
+            <Box key="ctx" flexDirection="row">
+              <Text dimColor>ctx </Text>
+              <Text color={levelColor(ctx)}>{meter(ctx)}</Text>
+              <Text color={levelColor(ctx)} bold>{` ${ctx}%`}</Text>
+            </Box>
+            {bar('sep-4')}
+            <Box key="five-hour" flexDirection="row">
+              <Text dimColor>5h </Text>
+              {fiveHour === null ? (
+                <Text dimColor>–</Text>
+              ) : (
+                <Text color={levelColor(fiveHour)} bold>{`${fiveHour}%`}</Text>
+              )}
+            </Box>
+            {bar('sep-5')}
+            <Text key="agents" dimColor>
+              {`◇ ${agentCount} agent${agentCount === 1 ? '' : 's'}`}
+            </Text>
+          </Box>
+          <Box backgroundColor={shown ? ACCENT : OFF_BG} paddingX={1}>
+            <Button
+              key="dashboard-toggle"
+              plain
+              label={`◆ Damon's Tools ${shown ? '▾' : '▸'}`}
+              onPress={() => setShown($, !shown)}
+            />
+          </Box>
         </Box>
         {theirs}
       </Box>

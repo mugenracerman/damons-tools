@@ -13,6 +13,15 @@ export type ModelChoice = { alias: string; label: string }
 // updated only by a plugin reload that went through.
 export type Running = { sessionId: string; enabled: Record<string, boolean> }
 
+// The status bar's figures: the context window and its fill, and the 5-hour
+// rate-limit window (null off a subscription or before the first reading).
+export type Usage = {
+  window: number
+  contextPercent: number | null
+  fiveHourPercent: number | null
+  isSubscription: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'damons-tools': {
@@ -23,6 +32,8 @@ declare module 'claude-code' {
       notice: string | null
       running: Running | null
       isShown: boolean
+      usage: Usage
+      agents: number
     }
   }
 }
