@@ -155,10 +155,9 @@ async function recordRunning($: $) {
   await update($, running, () => ({ sessionId, enabled: snapshot }))
 }
 
-// Shows or hides the dashboard; the choice is kept for later sessions.
+// Shows or hides the dashboard for this session; every new session opens it.
 async function setShown($: $, shown: boolean) {
   await update($, isShown, () => shown)
-  await $.store.set('isShown', shown)
   if (shown) await $.ui.open({ id: PANE, title: TITLE })
   else await $.ui.close({ id: PANE })
 }
@@ -211,9 +210,10 @@ export const register: Register = on => {
     if (typeof settings.effortLevel === 'string') await update($, effort, () => settings.effortLevel as string)
     await recordRunning($)
     await refresh($)
-    const shown = (await $.store.get('isShown')) !== false
-    await update($, isShown, () => shown)
-    if (shown) void $.ui.open({ id: PANE, title: TITLE })
+    // A hide is for one session only; earlier versions saved it for good.
+    await $.store.delete('isShown').catch(() => undefined)
+    await update($, isShown, () => true)
+    void $.ui.open({ id: PANE, title: TITLE })
     timer?.cancel()
     timer = $.clock.every(1500, () => sync($))
     return next(e)
@@ -255,13 +255,17 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Closing the pane by its own close mark counts as hiding it.
+  // Closing the pane by its own close mark counts as hiding it, for this session.
   on('ui.close', async ($, e, next) => {
-    if (e.id === PANE && e.origin.kind === 'person') {
-      await update($, isShown, () => false)
-      await $.store.set('isShown', false)
-    }
+    if (e.id === PANE && e.origin.kind === 'person') await update($, isShown, () => false)
     return next(e)
+  })
+
+  // The desktop app can attach after the session starts: open the pane for it then.
+  on('session.attach', async ($, e, next) => {
+    const attached = await next(e)
+    if (await read($, isShown)) void $.ui.open({ id: PANE, title: TITLE })
+    return attached
   })
 
   // One button in the bar under the prompt, in place of each plugin's own: they
