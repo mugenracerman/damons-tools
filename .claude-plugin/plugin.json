@@ -1,0 +1,7 @@
+{
+  "name": "damons-tools",
+  "version": "0.1.0",
+  "description": "Damon's Tools: a panel showing the session's model and effort, and every installed plugin with an on/off switch",
+  "author": { "name": "Damon" },
+  "types": "./types/index.d.ts"
+}

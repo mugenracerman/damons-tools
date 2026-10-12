@@ -1,0 +1,6 @@
+{
+  "name": "damons-tools",
+  "owner": { "name": "mugenracerman" },
+  "metadata": { "description": "Damon's Tools: a Claude Code dashboard showing the session's model and effort, and every installed plugin with an on/off switch." },
+  "plugins": [{ "name": "damons-tools", "source": "./" }]
+}
