@@ -2,9 +2,16 @@ export type PluginRow = {
   id: string
   name: string
   description: string
+  // Enabled in Claude Code, so its code loads: the dot on the left.
   isEnabled: boolean
   // Saved one way, but this session still runs it the other way.
   isPending: boolean
+  // The plugin keeps a switch of its own: a command under its name taking
+  // `on` and `off`, and `isOn` in its store.
+  hasSwitch: boolean
+  // What the toggle on the right shows: its own switch when it has one, else
+  // whether it is enabled.
+  isOn: boolean
 }
 
 export type ModelChoice = { alias: string; label: string }

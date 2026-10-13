@@ -10,6 +10,7 @@ const ACCENT = '#e8875b'
 const EFFORT_BG = '#a06a9a'
 const ON_BG = '#2bb673'
 const OFF_BG = '#3a3a3a'
+const TOGGLE_OFF = '#6e7681'
 const PENDING = '#e0b341'
 
 // Status bar colors.
@@ -135,10 +136,20 @@ async function scanPlugins($: $): Promise<PluginRow[]> {
   const settings = await $.settings.read()
   const enabled = (settings.enabledPlugins ?? {}) as Record<string, unknown>
   const live = (await read($, running))?.enabled ?? {}
+  const [commands, stores] = await Promise.all([
+    $.command
+      .list()
+      .then(list => new Set(list.map(c => c.name)))
+      .catch(() => new Set<string>()),
+    $.fs.list(`${base}/plugins/store`).catch(() => []),
+  ])
 
   const rows = await Promise.all(
     Object.entries(installed).map(async ([id, installs]) => {
       const name = id.split('@')[0] ?? id
+      const isEnabled = enabled[id] !== false
+      const switchOn = await savedSwitch($, base, id, stores)
+      const hasSwitch = isEnabled && commands.has(name) && switchOn !== undefined
       let description = ''
       const path = installs?.[0]?.installPath
       if (path) {
@@ -147,12 +158,31 @@ async function scanPlugins($: $): Promise<PluginRow[]> {
           description = manifest.description ?? ''
         } catch {}
       }
-      const isEnabled = enabled[id] !== false
       const isPending = id in live && live[id] !== isEnabled
-      return { id, name: titleCase(name), description: shorten(description), isEnabled, isPending }
+      const isOn = hasSwitch ? switchOn === true : isEnabled
+      return { id, name: titleCase(name), description: shorten(description), isEnabled, isPending, hasSwitch, isOn }
     }),
   )
   return rows.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// A plugin's own switch, `isOn` in its store (`<name>_<marketplace>-<hash>.json`);
+// undefined when it keeps none.
+async function savedSwitch(
+  $: $,
+  base: string,
+  id: string,
+  stores: readonly { name: string; kind: string }[],
+): Promise<boolean | undefined> {
+  const prefix = `${id.replace('@', '_')}-`
+  const file = stores.find(f => f.kind === 'file' && f.name.startsWith(prefix) && f.name.endsWith('.json'))
+  if (!file) return undefined
+  try {
+    const value = JSON.parse(await $.fs.read(`${base}/plugins/store/${file.name}`)).isOn
+    return typeof value === 'boolean' ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 async function scanModels($: $): Promise<ModelChoice[]> {
@@ -240,6 +270,36 @@ async function setPlugin($: $, row: PluginRow, isEnabled: boolean) {
   await refresh($)
 }
 
+// The toggle on the right. A plugin with a switch of its own is flipped by its
+// command and stays loaded; one without is enabled or disabled. Turning on a
+// disabled plugin enables it first, then turns its own switch on once loaded.
+async function togglePlugin($: $, row: PluginRow) {
+  const want = !row.isOn
+  if (row.hasSwitch) return runSwitch($, row, want)
+  if (want && !row.isEnabled) {
+    await setPlugin($, row, true)
+    const loaded = (await read($, plugins)).find(p => p.id === row.id)
+    if (loaded?.hasSwitch && !loaded.isOn) await runSwitch($, loaded, true)
+    return
+  }
+  await setPlugin($, row, want)
+}
+
+async function runSwitch($: $, row: PluginRow, want: boolean) {
+  const command = row.id.split('@')[0] ?? row.id
+  try {
+    await $.command.run({ command, args: want ? 'on' : 'off' })
+    await update($, notice, () => `${row.name} turned ${want ? 'on' : 'off'}`)
+  } catch (err) {
+    await update($, notice, () => `Could not change ${row.name}: ${String(err)}`)
+    await refresh($)
+    return
+  }
+  await refresh($)
+  // The command answered; its store may land on disk a moment after.
+  await update($, plugins, list => list.map(p => (p.id === row.id ? { ...p, isOn: want } : p)))
+}
+
 async function setModel($: $, alias: string) {
   try {
     await $.command.run({ command: 'model', args: alias })
@@ -288,6 +348,14 @@ export const register: Register = on => {
     if ((EFFORTS as readonly string[]).includes(asked)) await update($, effort, () => asked)
     const ran = await next(e)
     await sync($)
+    return ran
+  })
+
+  // A plugin's own switch typed anywhere (`/automodel off`): redraw its toggle.
+  on('command.run', async ($, e, next) => {
+    const ran = await next(e)
+    const isSwitch = (await read($, plugins)).some(p => p.hasSwitch && p.id.split('@')[0] === e.command)
+    if (isSwitch && e.origin?.kind !== 'plugin') await refresh($)
     return ran
   })
 
@@ -484,8 +552,8 @@ export const register: Register = on => {
         {list.map(p => (
           <Box key={`row-${p.id}`} flexDirection="row" justifyContent="space-between">
             <Box flexDirection="row">
-              <Text color={p.isEnabled ? ON_BG : undefined} dimColor={!p.isEnabled}>
-                {p.isEnabled ? '● ' : '○ '}
+              <Text key={`loaded-${p.id}`} color={p.isEnabled ? ON_BG : BAD}>
+                {'● '}
               </Text>
               <Text bold={p.isEnabled} dimColor={!p.isEnabled}>
                 {p.name}
@@ -500,12 +568,12 @@ export const register: Register = on => {
             )}
             <Box
               key={`switch-${p.id}`}
-              backgroundColor={p.isEnabled ? ON_BG : OFF_BG}
+              backgroundColor={p.isOn ? ON_BG : TOGGLE_OFF}
               borderStyle="round"
-              borderColor={p.isEnabled ? ON_BG : OFF_BG}
+              borderColor={p.isOn ? ON_BG : TOGGLE_OFF}
             >
-              <Button key={`toggle-${p.id}`} plain onPress={() => setPlugin($, p, !p.isEnabled)}>
-                {p.isEnabled ? ' ● On  ' : ' ○ Off '}
+              <Button key={`toggle-${p.id}`} plain onPress={() => togglePlugin($, p)}>
+                {p.isOn ? ' ● On  ' : ' ○ Off '}
               </Button>
             </Box>
             </Box>
