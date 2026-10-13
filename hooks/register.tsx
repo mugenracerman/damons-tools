@@ -216,7 +216,19 @@ async function sync($: $) {
       await update($, effort, () => level)
     }
   } catch {}
-  await Promise.all([measure($), countAgents($)])
+  await Promise.all([measure($), countAgents($), watchSwitches($)])
+}
+
+// A plugin's own switch flipped anywhere (`/automodel off` typed, its own button):
+// its store file changes, and the rows are read again.
+let storesSeen = ''
+async function watchSwitches($: $) {
+  try {
+    const files = await $.fs.list(`${await home($)}/.claude/plugins/store`)
+    const seen = files.map(f => `${f.name}:${f.mtimeMs}`).sort().join('|')
+    if (storesSeen !== '' && seen !== storesSeen) await refresh($)
+    storesSeen = seen
+  } catch {}
 }
 
 // True only when the reload ran: it throws, or answers with a refusal, where it
@@ -348,14 +360,6 @@ export const register: Register = on => {
     if ((EFFORTS as readonly string[]).includes(asked)) await update($, effort, () => asked)
     const ran = await next(e)
     await sync($)
-    return ran
-  })
-
-  // A plugin's own switch typed anywhere (`/automodel off`): redraw its toggle.
-  on('command.run', async ($, e, next) => {
-    const ran = await next(e)
-    const isSwitch = (await read($, plugins)).some(p => p.hasSwitch && p.id.split('@')[0] === e.command)
-    if (isSwitch && e.origin?.kind !== 'plugin') await refresh($)
     return ran
   })
 
