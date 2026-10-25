@@ -30,3 +30,16 @@ claude plugin install damons-tools@damons-tools
 ```
 
 `/damons-tools` reopens the dashboard.
+
+## Develop
+
+```
+claude plugin validate .
+claude plugin test .
+```
+
+`claude --plugin-dir <this folder>` runs it from disk for one session.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
